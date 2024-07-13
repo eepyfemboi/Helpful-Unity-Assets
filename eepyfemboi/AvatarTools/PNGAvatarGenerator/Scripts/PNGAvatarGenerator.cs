@@ -1,8 +1,8 @@
 /*
- * Utility scripts to allow for customized error windows
- * Made by eepyfemboi | Version 1.0.0
+ * A script I made to automatically generate, build, and upload a PNG avatar for both PC and Quest
+ * Made by eepyfemboi | Version 1.0.9
  * 
- * LICENSE:
+ *  * LICENSE:
  * 
  * =======================================================================
  * 
@@ -338,37 +338,307 @@
 using UnityEditor;
 
 #if UNITY_EDITOR
+using VRC.Core;
+using VRC.SDKBase.Editor.Api;
+using VRC.SDK3A.Editor;
+using System.Threading.Tasks;
 using UnityEngine;
+using System.IO;
+using System.Collections;
+using System.Collections.Generic;
+using System.Drawing;
+using System;
+using VRC.SDK3.Avatars.Components;
+using VRC.SDKBase;
+using VRC.SDKBase.Editor.BuildPipeline;
+using System.Linq;
+using eepyfemboi.General.GUI;
+using UnityEditor.Build;
 
-namespace eepyfemboi.General.GUI
+namespace eepyfemboi.AvatarTools.PNGAvatarGenerator
 {
-    public class CriticalErrorWindow : EditorWindow
+    public class PNGAvatarGenerator : EditorWindow
     {
-        private string message;
-        private string defaultMessage = "A critical unhandled error occurred. This should never happen.\n" +
-            "Reasons for this may include moving the \"Assets/eepyfemboi\" folder or moving items inside of it, or not importing necessary assets.\n" +
-            "Please make sure you have fully imported the any required SDKs, such as the VRChat SDK, then try again.\n" +
-            "If this still happens or you have moved the \"Assets/eepyfemboi\" folder, then delete the folder and then reimport the assets and try again.\n" +
-            "If it still happens after that, then join https://discord.gg/femz and join the server that the bot sends you, and ask for help there.\n" +
-            "\nMore info:\n";
+        // constants
+        private const string baseAssetPath = "Assets/eepyfemboi/AvatarTools/PNGAvatarGenerator/GeneratedAssets/";
+        private const string prefabPath = "Assets/eepyfemboi/AvatarTools/PNGAvatarGenerator/BaseAssets/Avatar/Prefab/PNGAvatarBase.prefab";
+        private const string description = "Generated using Sleepy Femboy (eepyfemboi)'s PNG Avatar Generator. Go to https://eepy.io/a27 for more info.";
 
-        public static CriticalErrorWindow ShowError(string errorMessage)
+        // used for generating the avatar
+        private string aviName = "PNG Avatar";
+        private Texture2D textureAsset;
+        private float dimensionMultiplier;
+        private int imageWidth, imageHeight;
+        
+        // used for uploading the avatar
+        private VRCAvatar avatarData;
+        private string thumbPath;
+        private static IVRCSdkAvatarBuilderApi builder;
+
+        [MenuItem("Tools/eepyfemboi/PNG Avatar Generator")]
+        public static void ShowWindow()
         {
-            CriticalErrorWindow window = CreateInstance<CriticalErrorWindow>();
-            window.message = errorMessage;
-            window.titleContent = new GUIContent("Critical Error (in other words, this is bad)");
-            window.ShowUtility();
-            return window;
+            GetWindow<PNGAvatarGenerator>("PNG Avatar Generator");
         }
 
-        void OnGUI()
+        [InitializeOnLoadMethod]
+        public static void RegisterSDKCallback()
         {
-            EditorGUILayout.HelpBox(defaultMessage + message, MessageType.Error);
+            VRCSdkControlPanel.OnSdkPanelEnable += AddBuildHook;
+        }
 
-            if (GUILayout.Button("Close"))
+        private static void AddBuildHook(object sender, EventArgs e)
+        {
+            VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out builder);
+        }
+
+        private void OnGUI()
+        {
+            GUILayout.Label("PNG Avatar Generator", EditorStyles.boldLabel);
+
+            EditorGUILayout.HelpBox("Before creating an avatar, please make sure you are logged into " +
+                "your VRChat account in the SDK Window. If you cannot find the SDK Window, simply " +
+                "find the toolbar at the top, click on \"VRChat SDK\", then click on " +
+                "\"Show Control Panel\", then sign in and click on the \"Builder\" tab.", MessageType.Warning);
+
+            EditorGUILayout.HelpBox("When creating an avatar, the script will automatically generate, " +
+                "build, and upload the avatar for both PC and Quest. While its doing this, please do not " +
+                "click on anything in the Editor until a window pops up telling you that the upload " +
+                "is complete.", MessageType.Warning);
+
+            textureAsset = (Texture2D)EditorGUILayout.ObjectField("Texture Asset", textureAsset, typeof(Texture2D), false);
+            EditorGUILayout.HelpBox("The Texture Asset is the image you want to make into a PNG Avatar.\n" +
+                "It must be either in PNG or JPEG format, and cannot be animated.\n" +
+                "To set an image, simply drag and drop the image into the \"Assets\" " +
+                "window and then drag and drop the new image into the texture box.", MessageType.Info);
+
+            aviName = EditorGUILayout.TextField("Image Name", aviName);
+            EditorGUILayout.HelpBox("The Image Name is what the avatar will be named.\n" +
+                "This should be a short and descriptive name, usually 1-5 words.", MessageType.Info);
+
+
+            if (textureAsset != null)
             {
-                this.Close();
+                string assetPath = AssetDatabase.GetAssetPath(textureAsset);
+
+                using (var image = new Bitmap(assetPath))
+                {
+                    imageWidth = image.Width;
+                    imageHeight = image.Height;
+                }
+
+                dimensionMultiplier = 1.7f / (imageHeight / 1000f);
             }
+
+            if (GUILayout.Button("Create and Upload Avatar")) { CreateAndUploadAvatar(); }
+        }
+
+        private async void CreateAndUploadAvatar()
+        {
+            GenericInfoWindow infoWindow;
+
+            if (textureAsset == null)
+            {
+                Debug.LogError("Please ensure that you have selected an image.");
+                GenericErrorWindow.ShowError("Please ensure that you have selected an image.");
+                return;
+            }
+
+            if (builder == null)
+            {
+                Debug.LogError("Builder instance not found. Ensure the SDK window is open.");
+                GenericErrorWindow.ShowError("Builder instance not found. Ensure the SDK window is open.");
+                return;
+            }
+
+            GameObject baseAvatar = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (baseAvatar == null)
+            {
+                Debug.LogError($"Base avatar prefab not found at {prefabPath}");
+                return;
+            }
+
+            string materialPath = baseAssetPath + "Materials";
+            string texturePath = baseAssetPath + "Textures";
+            string generatedPrefabsPath = baseAssetPath + "Prefabs";
+            if (!Directory.Exists(materialPath)) { Directory.CreateDirectory(materialPath); }
+            if (!Directory.Exists(texturePath)) { Directory.CreateDirectory(texturePath); }
+            if (!Directory.Exists(generatedPrefabsPath)) { Directory.CreateDirectory(generatedPrefabsPath); }
+
+            string assetPath = AssetDatabase.GetAssetPath(textureAsset);
+            string extension = Path.GetExtension(assetPath);
+
+            using (var image = new Bitmap(assetPath))
+            {
+                imageWidth = image.Width;
+                imageHeight = image.Height;
+            }
+
+            string name = $"{aviName}-{imageWidth}x{imageHeight}";
+            string fileName = $"{name}{extension}";
+            string newTexturePath = $"{texturePath}/{fileName}";
+            File.Copy(assetPath, newTexturePath, true);
+
+            TextureImporter textureImporter = AssetImporter.GetAtPath(newTexturePath) as TextureImporter;
+            if (textureImporter != null)
+            {
+                textureImporter.streamingMipmaps = true;
+                textureImporter.isReadable = true;
+
+                TextureImporterPlatformSettings androidSettings = textureImporter.GetPlatformTextureSettings("Android");
+                androidSettings.overridden = true;
+                androidSettings.format = TextureImporterFormat.ASTC_6x6;
+                textureImporter.SetPlatformTextureSettings(androidSettings);
+
+                EditorUtility.SetDirty(textureImporter);
+
+                textureImporter.SaveAndReimport();
+                AssetDatabase.ImportAsset(newTexturePath, ImportAssetOptions.ForceUpdate);
+
+                // for this part i pretty much just copy/pasted from the vrc sdk and im stupid so its probably done wrong i just used the editor errors to guide me lol
+                List<string> assets = new List<string>();
+                assets.Add(newTexturePath);
+                AssetDatabase.ForceReserializeAssets(assets);
+
+                await Task.Delay(1000);
+            }
+
+            AssetDatabase.Refresh();
+
+
+            Material newMaterial = new Material(Shader.Find("VRChat/Mobile/Toon Lit"));
+            newMaterial.mainTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(newTexturePath);
+
+            AssetDatabase.CreateAsset(newMaterial, $"{materialPath}/{name}.mat");
+            AssetDatabase.SaveAssets();
+
+            GameObject createdAvatar = PrefabUtility.InstantiatePrefab(baseAvatar) as GameObject;
+            createdAvatar.SetActive(true);
+            createdAvatar.name = name;
+
+            Transform childTransform = FindChildWithMeshRenderer(createdAvatar.transform, "Display");
+            if (childTransform == null)
+            {
+                CriticalErrorWindow.ShowError("Child object not found in the duplicated avatar.");
+                DestroyImmediate(createdAvatar);
+                return;
+            }
+
+            float newWidth = imageWidth * dimensionMultiplier;
+            float newHeight = imageHeight * dimensionMultiplier;
+
+            childTransform.localScale = new Vector3(childTransform.localScale.x, newHeight / 1000f, newWidth / 1000f);
+
+            MeshRenderer meshRenderer = childTransform.GetComponent<MeshRenderer>();
+            if (meshRenderer == null)
+            {
+                CriticalErrorWindow.ShowError("MeshRenderer not found on the child object.");
+                DestroyImmediate(createdAvatar);
+                return;
+            }
+
+            meshRenderer.material = newMaterial;
+
+            PrefabUtility.SaveAsPrefabAsset(createdAvatar, $"{generatedPrefabsPath}/{name}.prefab");
+            Debug.Log($"Avatar creation complete. New avatar named '{createdAvatar.name}' created in the scene.");
+
+            VRCAvatarDescriptor avatarDescriptor = createdAvatar.GetComponent<VRCAvatarDescriptor>();
+            if (avatarDescriptor == null)
+            {
+                CriticalErrorWindow.ShowError($"No VRCAvatarDescriptor found on {createdAvatar.name}");
+                return;
+            }
+
+            PipelineManager pipelineManager = createdAvatar.GetComponent<PipelineManager>();
+            if (pipelineManager == null)
+            {
+                CriticalErrorWindow.ShowError($"No VRC_AvatarPipelineManager found on {createdAvatar.name}");
+                return;
+            }
+
+            avatarData = new VRCAvatar();
+
+            avatarData.Name = aviName;
+            avatarData.Description = description;
+            avatarData.ReleaseStatus = "public";
+            avatarData.Tags = new List<string>();
+            AvatarBuilderSessionState.AvatarName = aviName;
+            AvatarBuilderSessionState.AvatarDesc = description;
+            AvatarBuilderSessionState.AvatarReleaseStatus = "public";
+            AvatarBuilderSessionState.AvatarTags = "";
+
+            Texture2D thumbnailTexture = (Texture2D)meshRenderer.sharedMaterial.mainTexture;
+            thumbPath = AssetDatabase.GetAssetPath(thumbnailTexture);
+
+            AvatarBuilderSessionState.AvatarThumbPath = thumbPath;
+
+            Debug.Log("Switching build target to Android");
+            infoWindow = GenericInfoWindow.ShowMessage("Switching build target to Android (Quest). Please wait...");
+            if (EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android)
+            {
+                EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
+            }
+            EditorUserBuildSettings.androidBuildSubtarget = MobileTextureSubtarget.ASTC;
+
+            infoWindow.Close();
+            Debug.Log("Beginning build for Android...");
+            infoWindow = GenericInfoWindow.ShowMessage("Beginning avatar upload for Android (Quest). Please wait...");
+
+            try
+            {
+                await builder.BuildAndUpload(avatarDescriptor.gameObject, avatarData, thumbPath);
+                Debug.Log($"Successfully uploaded avatar: {avatarDescriptor.gameObject.name}");
+            }
+            catch (Exception e)
+            {
+                GenericErrorWindow.ShowError($"Failed to upload avatar: {avatarDescriptor.gameObject.name} for Android - {e.Message}. Quitting.");
+                return;
+            }
+
+            Debug.Log($"Did {createdAvatar.name} for Android. Switching build target...");
+
+            infoWindow.Close();
+            infoWindow = GenericInfoWindow.ShowMessage("Finished uploading for Android (Quest). Switching the build target to Windows (PC).");
+            EditorUserBuildSettings.SwitchActiveBuildTarget(BuildPipeline.GetBuildTargetGroup(BuildTarget.StandaloneWindows64), BuildTarget.StandaloneWindows64);
+
+            Debug.Log("Beginning build for Windows...");
+            infoWindow.Close();
+            await Task.Delay(5000);
+            infoWindow = GenericInfoWindow.ShowMessage("Beginning avatar upload for Windows (PC). Please wait...");
+
+            try
+            {
+                await builder.BuildAndUpload(avatarDescriptor.gameObject, avatarData, thumbPath);
+                Debug.Log($"Successfully uploaded avatar: {avatarDescriptor.gameObject.name}");
+            }
+            catch (Exception e)
+            {
+                GenericErrorWindow.ShowError($"Failed to upload avatar: {avatarDescriptor.gameObject.name} for Windows (PC) - {e.Message}. Quitting.");
+                return;
+            }
+            
+            infoWindow.Close();
+            Debug.Log($"Did {createdAvatar.name} for {EditorUserBuildSettings.activeBuildTarget}.");
+            EditorUtility.DisplayDialog("Finished!", "Successfully finished uploading the avatar. You can find your avatar in the 'Uploaded' section in avatars.", "OK");
+        }
+
+        private Transform FindChildWithMeshRenderer(Transform parent, string childName)
+        {
+            foreach (Transform child in parent)
+            {
+                if (child.name == childName && child.GetComponent<MeshRenderer>() != null)
+                {
+                    return child;
+                }
+
+                Transform found = FindChildWithMeshRenderer(child, childName);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+
+            return null;
         }
     }
 }

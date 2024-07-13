@@ -346,12 +346,13 @@ namespace eepyfemboi.General.GUI
     {
         private string message;
 
-        public static void ShowError(string errorMessage)
+        public static GenericErrorWindow ShowError(string errorMessage)
         {
             GenericErrorWindow window = CreateInstance<GenericErrorWindow>();
             window.message = errorMessage;
             window.titleContent = new GUIContent("Error");
             window.ShowUtility();
+            return window;
         }
 
         void OnGUI()

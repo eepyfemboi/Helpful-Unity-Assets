@@ -1,5 +1,5 @@
 /*
- * Utility scripts to allow for customized error windows
+ * Utility scripts to allow for customized info windows
  * Made by eepyfemboi | Version 1.0.0
  * 
  * LICENSE:
@@ -342,28 +342,22 @@ using UnityEngine;
 
 namespace eepyfemboi.General.GUI
 {
-    public class CriticalErrorWindow : EditorWindow
+    public class GenericInfoWindow : EditorWindow
     {
         private string message;
-        private string defaultMessage = "A critical unhandled error occurred. This should never happen.\n" +
-            "Reasons for this may include moving the \"Assets/eepyfemboi\" folder or moving items inside of it, or not importing necessary assets.\n" +
-            "Please make sure you have fully imported the any required SDKs, such as the VRChat SDK, then try again.\n" +
-            "If this still happens or you have moved the \"Assets/eepyfemboi\" folder, then delete the folder and then reimport the assets and try again.\n" +
-            "If it still happens after that, then join https://discord.gg/femz and join the server that the bot sends you, and ask for help there.\n" +
-            "\nMore info:\n";
 
-        public static CriticalErrorWindow ShowError(string errorMessage)
+        public static GenericInfoWindow ShowMessage(string infoMessage)
         {
-            CriticalErrorWindow window = CreateInstance<CriticalErrorWindow>();
-            window.message = errorMessage;
-            window.titleContent = new GUIContent("Critical Error (in other words, this is bad)");
+            GenericInfoWindow window = CreateInstance<GenericInfoWindow>();
+            window.message = infoMessage;
+            window.titleContent = new GUIContent("Info");
             window.ShowUtility();
             return window;
         }
 
         void OnGUI()
         {
-            EditorGUILayout.HelpBox(defaultMessage + message, MessageType.Error);
+            EditorGUILayout.HelpBox(message, MessageType.Info);
 
             if (GUILayout.Button("Close"))
             {
